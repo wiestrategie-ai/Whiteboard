@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Whiteboard – WAC65</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none;}
+html,body{width:100%;height:100%;overflow:hidden;background:#fff;font-family:Arial,sans-serif;}
+#app{display:flex;flex-direction:column;width:100%;height:100vh;}
+#toolbar{display:flex;align-items:center;gap:6px;padding:8px 14px;background:#fff;border-bottom:1px solid #ddd;flex-wrap:wrap;min-height:58px;}
+.tool-group{display:flex;align-items:center;gap:4px;padding-right:10px;border-right:1px solid #ddd;}
+.tool-group:last-child{border-right:none;}
+button.tb{background:transparent;border:1px solid transparent;border-radius:8px;padding:7px 10px;cursor:pointer;font-size:14px;color:#555;display:flex;align-items:center;gap:5px;transition:background 0.15s;}
+button.tb:hover{background:#f0f0f0;}
+button.tb.active{background:#efefef;border-color:#bbb;color:#111;}
+.color-dot{width:24px;height:24px;border-radius:50%;border:2px solid rgba(0,0,0,0.12);cursor:pointer;flex-shrink:0;transition:transform 0.1s;}
+.color-dot.active{border:3px solid #111;transform:scale(1.18);}
+input[type=range]{width:80px;cursor:pointer;}
+#canvas-wrap{position:relative;flex:1;overflow:hidden;background:#ffffff;touch-action:none;}
+#bg-canvas,#draw-canvas{position:absolute;top:0;left:0;}
+#draw-canvas{touch-action:none;}
+#status{position:absolute;bottom:12px;left:14px;font-size:13px;color:#555;background:rgba(255,255,255,0.9);padding:4px 12px;border-radius:20px;pointer-events:none;border:1px solid #eee;}
+#pen-info{position:absolute;bottom:12px;right:14px;font-size:13px;color:#555;background:rgba(255,255,255,0.9);padding:4px 12px;border-radius:20px;pointer-events:none;border:1px solid #eee;}
+#size-val{font-size:12px;color:#666;min-width:28px;}
+.tb-label{background:transparent;border:1px solid transparent;border-radius:8px;padding:7px 10px;cursor:pointer;font-size:14px;color:#555;display:flex;align-items:center;gap:5px;}
+.tb-label:hover{background:#f0f0f0;}
+#smooth-val{font-size:12px;color:#666;min-width:20px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+
+    <div class="tool-group">
+      <button class="tb active" id="tool-pen">✏️ Stift</button>
+      <button class="tb" id="tool-marker">🖍 Marker</button>
+      <button class="tb" id="tool-eraser">🧹 Rad.</button>
+    </div>
+
+    <div class="tool-group">
+      <div class="color-dot active" style="background:#1a1a1a" data-color="#1a1a1a" title="Schwarz"></div>
+      <div class="color-dot" style="background:#e23030" data-color="#e23030" title="Rot"></div>
+      <div class="color-dot" style="background:#1a6fd4" data-color="#1a6fd4" title="Blau"></div>
+      <div class="color-dot" style="background:#1d9e75" data-color="#1d9e75" title="Grün"></div>
+      <div class="color-dot" style="background:#e08a00" data-color="#e08a00" title="Orange"></div>
+      <div class="color-dot" style="background:#993556" data-color="#993556" title="Pink"></div>
+      <div class="color-dot" style="background:#ffffff;border:2px solid #aaa;" data-color="#ffffff" title="Weiß"></div>
+    </div>
+
+    <div class="tool-group">
+      <span style="font-size:12px;color:#777;">Größe:</span>
+      <input type="range" id="size-slider" min="1" max="50" value="4">
+      <span id="size-val">4px</span>
+    </div>
+
+    <div class="tool-group">
+      <span style="font-size:12px;color:#777;">Glättung:</span>
+      <input type="range" id="smooth-slider" min="0" max="9" value="6">
+      <span id="smooth-val">6</span>
+    </div>
+
+    <div class="tool-group">
+      <label class="tb-label" title="Hintergrundbild laden">
+        🖼 Bild
+        <input type="file" id="img-input" accept="image/*" style="display:none">
+      </label>
+      <button class="tb" id="btn-clear-bg" title="Hintergrundbild entfernen">🗑 Bg</button>
+    </div>
+
+    <div class="tool-group">
+      <button class="tb" id="btn-undo">↩ Undo</button>
+      <button class="tb" id="btn-clear">🗑 Löschen</button>
+    </div>
+
+    <div class="tool-group">
+      <button class="tb" id="btn-png">💾 PNG</button>
+    </div>
+
+  </div>
+
+  <div id="canvas-wrap">
+    <canvas id="bg-canvas"></canvas>
+    <canvas id="draw-canvas"></canvas>
+    <div id="status">Bereit – Stift oder Finger auf die Fläche</div>
+    <div id="pen-info">Stift: —</div>
+  </div>
+</div>
+
+<script>
+const wrap   = document.getElementById('canvas-wrap');
+const bgC    = document.getElementById('bg-canvas');
+const drawC  = document.getElementById('draw-canvas');
+const bgX    = bgC.getContext('2d');
+const ctx    = drawC.getContext('2d');
+const statusEl   = document.getElementById('status');
+const penInfoEl  = document.getElementById('pen-info');
+const sizeSlider = document.getElementById('size-slider');
+const sizeValEl  = document.getElementById('size-val');
+const smoothSlider = document.getElementById('smooth-slider');
+const smoothValEl  = document.getElementById('smooth-val');
+
+let W=0, H=0, bgImage=null;
+let currentTool='pen', currentColor='#1a1a1a', currentSize=4;
+let smoothing = 6;
+let isDrawing=false;
+let history=[], historyLimit=40;
+
+// Punktpuffer für Glättung
+let points = [];
+
+function resize(){
+  W=wrap.clientWidth; H=wrap.clientHeight;
+  const saved = ctx.getImageData(0,0,drawC.width||1,drawC.height||1);
+  [bgC,drawC].forEach(c=>{c.width=W;c.height=H;});
+  bgX.fillStyle='#ffffff'; bgX.fillRect(0,0,W,H);
+  redrawBg();
+  try{ if(saved.width>1) ctx.putImageData(saved,0,0); }catch(e){}
+}
+
+function redrawBg(){
+  bgX.fillStyle='#ffffff'; bgX.fillRect(0,0,W,H);
+  if(bgImage){
+    const r=Math.min(W/bgImage.width, H/bgImage.height);
+    const bw=bgImage.width*r, bh=bgImage.height*r;
+    bgX.drawImage(bgImage,(W-bw)/2,(H-bh)/2,bw,bh);
+  }
+}
+
+function saveHistory(){
+  if(history.length>=historyLimit) history.shift();
+  history.push(ctx.getImageData(0,0,W,H));
+}
+
+function getPenLabel(pt, pressure){
+  if(pt==='pen')   return 'Stift | Druck: '+Math.round((pressure||0)*100)+'%';
+  if(pt==='touch') return 'Finger';
+  return 'Maus';
+}
+
+// Mittelpunkt zweier Punkte
+function midPoint(p1, p2){
+  return { x:(p1.x+p2.x)/2, y:(p1.y+p2.y)/2 };
+}
+
+// Geglätteten Pfad mit Bezier-Kurven zeichnen
+function drawSmoothedPath(pts, lineWidth, color, alpha, composite){
+  if(pts.length < 2) return;
+  ctx.save();
+  ctx.globalCompositeOperation = composite;
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+
+  if(pts.length === 2){
+    ctx.lineTo(pts[1].x, pts[1].y);
+  } else {
+    for(let i=1; i < pts.length-1; i++){
+      const mid = midPoint(pts[i], pts[i+1]);
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mid.x, mid.y);
+    }
+    const last = pts[pts.length-1];
+    ctx.lineTo(last.x, last.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Exponentiell geglättete Position
+function smoothPoint(newP, lastP, factor){
+  if(!lastP) return newP;
+  const f = factor / 10;
+  return {
+    x: lastP.x + (newP.x - lastP.x) * (1 - f),
+    y: lastP.y + (newP.y - lastP.y) * (1 - f)
+  };
+}
+
+let lastSmoothed = null;
+let currentLW = 4;
+let currentAlpha = 1;
+let currentComposite = 'source-over';
+
+function getStyleParams(pt, pressure){
+  if(currentTool==='eraser'){
+    return { lw: currentSize*3, color:'rgba(0,0,0,1)', alpha:1, composite:'destination-out' };
+  } else if(currentTool==='marker'){
+    return { lw: currentSize*3, color:currentColor, alpha:0.38, composite:'source-over' };
+  } else {
+    const pw = pt==='pen' ? Math.max(0.8, currentSize * (pressure||0.5) * 2) : currentSize;
+    return { lw: pw, color:currentColor, alpha:1, composite:'source-over' };
+  }
+}
+
+function startDraw(x, y, pt, pressure){
+  isDrawing = true;
+  lastSmoothed = {x,y};
+  points = [{x,y}];
+  saveHistory();
+  const s = getStyleParams(pt, pressure);
+  currentLW = s.lw; currentAlpha = s.alpha; currentComposite = s.composite;
+  statusEl.textContent = getPenLabel(pt, pressure);
+  penInfoEl.textContent = 'Stift: ' + getPenLabel(pt, pressure);
+}
+
+function moveDraw(x, y, pt, pressure){
+  if(!isDrawing) return;
+
+  // Positions-Glättung (exponentiell)
+  const raw = {x, y};
+  const smoothFactor = smoothing; // 0=roh, 9=maximal geglättet
+  const sp = smoothPoint(raw, lastSmoothed, smoothFactor);
+  lastSmoothed = sp;
+  points.push(sp);
+
+  // Puffer begrenzen für Performance
+  if(points.length > 80) points = points.slice(-60);
+
+  // Nur letzten Abschnitt neu zeichnen (effizient)
+  const s = getStyleParams(pt, pressure);
+  const drawPts = points.slice(-4);
+  drawSmoothedPath(drawPts, s.lw, s.color, s.alpha, s.composite);
+
+  penInfoEl.textContent = 'Stift: ' + getPenLabel(pt, pressure);
+}
+
+function endDraw(){
+  if(!isDrawing) return;
+  // Letzten Abschnitt sauber abschließen
+  if(points.length >= 2){
+    const s = getStyleParams('', 0.5);
+    drawSmoothedPath(points.slice(-6), s.lw, s.color, s.alpha, s.composite);
+  }
+  isDrawing = false;
+  points = [];
+  lastSmoothed = null;
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function getEvtData(e){
+  const r = drawC.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: src.clientX - r.left,
+    y: src.clientY - r.top,
+    pt: e.pointerType || (e.touches ? 'touch' : 'mouse'),
+    p:  (typeof e.pressure !== 'undefined' && e.pressure > 0) ? e.pressure : 0.5
+  };
+}
+
+drawC.addEventListener('pointerdown',  e=>{ e.preventDefault(); const d=getEvtData(e); startDraw(d.x,d.y,d.pt,d.p); });
+drawC.addEventListener('pointermove',  e=>{ e.preventDefault(); const d=getEvtData(e); moveDraw(d.x,d.y,d.pt,d.p); });
+drawC.addEventListener('pointerup',    e=>{ endDraw(); });
+drawC.addEventListener('pointerleave', e=>{ endDraw(); });
+drawC.addEventListener('pointercancel',e=>{ endDraw(); });
+drawC.addEventListener('touchstart',   e=>e.preventDefault(),{passive:false});
+drawC.addEventListener('touchmove',    e=>e.preventDefault(),{passive:false});
+
+// Werkzeuge
+['pen','marker','eraser'].forEach(t=>{
+  document.getElementById('tool-'+t).addEventListener('click',()=>{
+    currentTool=t;
+    document.querySelectorAll('.tb[id^="tool-"]').forEach(b=>b.classList.remove('active'));
+    document.getElementById('tool-'+t).classList.add('active');
+  });
+});
+
+// Farben
+document.querySelectorAll('.color-dot').forEach(d=>{
+  d.addEventListener('click',()=>{
+    document.querySelectorAll('.color-dot').forEach(x=>x.classList.remove('active'));
+    d.classList.add('active');
+    currentColor = d.dataset.color;
+    if(currentTool==='eraser'){
+      currentTool='pen';
+      document.querySelectorAll('.tb[id^="tool-"]').forEach(b=>b.classList.remove('active'));
+      document.getElementById('tool-pen').classList.add('active');
+    }
+  });
+});
+
+// Größe
+sizeSlider.addEventListener('input',()=>{
+  currentSize = parseInt(sizeSlider.value);
+  sizeValEl.textContent = currentSize+'px';
+});
+
+// Glättung
+smoothSlider.addEventListener('input',()=>{
+  smoothing = parseInt(smoothSlider.value);
+  smoothValEl.textContent = smoothing;
+});
+
+// Undo
+document.getElementById('btn-undo').addEventListener('click',()=>{
+  if(history.length>0){ ctx.putImageData(history.pop(),0,0); statusEl.textContent='Rückgängig'; }
+});
+
+// Löschen
+document.getElementById('btn-clear').addEventListener('click',()=>{
+  if(confirm('Alle Zeichnungen löschen?')){ saveHistory(); ctx.clearRect(0,0,W,H); statusEl.textContent='Zeichenfläche geleert'; }
+});
+
+// Bild laden
+document.getElementById('img-input').addEventListener('change',e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const img=new Image();
+    img.onload=()=>{ bgImage=img; redrawBg(); statusEl.textContent='Hintergrundbild geladen'; };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  e.target.value='';
+});
+
+// Hintergrund entfernen
+document.getElementById('btn-clear-bg').addEventListener('click',()=>{
+  bgImage=null; redrawBg(); statusEl.textContent='Hintergrundbild entfernt';
+});
+
+// PNG Export
+document.getElementById('btn-png').addEventListener('click',()=>{
+  const out=document.createElement('canvas');
+  out.width=W; out.height=H;
+  const ox=out.getContext('2d');
+  ox.drawImage(bgC,0,0);
+  ox.drawImage(drawC,0,0);
+  const a=document.createElement('a');
+  const ts=new Date().toISOString().slice(0,16).replace('T','_').replace(':','-');
+  a.download='whiteboard_'+ts+'.png';
+  a.href=out.toDataURL('image/png');
+  a.click();
+  statusEl.textContent='PNG gespeichert';
+});
+
+resize();
+window.addEventListener('resize', resize);
+</script>
+</body>
+</html>
